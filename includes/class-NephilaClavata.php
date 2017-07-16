@@ -29,6 +29,7 @@ class NephilaClavata {
 		add_filter('the_content', array($this, 'the_content'));
 		add_filter('widget_text', array($this, 'widget_text'));
 		add_filter('wp_get_attachment_url', array($this, 'get_attachment_url'), 10, 2);
+		add_filter('wp_calculate_image_srcset', array($this, 'wp_calculate_image_srcset'), 10, 5);
 
 		// update S3 object
 		add_action('edit_attachment', array($this, 'edit_attachment'));
@@ -59,6 +60,20 @@ class NephilaClavata {
 		add_filter('wp_get_attachment_url', array($this, 'get_attachment_url'), 10, 2);
 
 		return $content;
+	}
+
+	// image srcset filter hook
+	public function wp_calculate_image_srcset($sources, $size_array, $image_src, $image_meta, $attachment_id) {
+
+		foreach ($sources as $key => $src) {
+			$url = $src['url'];
+			remove_filter('wp_get_attachment_url', array($this, 'get_attachment_url'), 10, 2);
+			$url = $this->replace_s3_url($url, false, $attachment_id);
+			add_filter('wp_get_attachment_url', array($this, 'get_attachment_url'), 10, 2);
+			$sources[$key]['url'] = $url;
+		}
+
+		return $sources;
 	}
 
 	// wp_get_attachment_url filter hook
@@ -149,7 +164,7 @@ class NephilaClavata {
 	}
 
 	// Replace URL
-	private function replace_s3_url($content, $post_id){
+	private function replace_s3_url($content, $post_id, $attachment_id = null){
 		global $pagenow;
 
 		if (empty($content))
@@ -157,13 +172,14 @@ class NephilaClavata {
 
 		$s3_bucket = isset(self::$options['bucket']) ? self::$options['bucket'] : false;
 		$s3_url = isset(self::$options['s3_url']) ? self::$options['s3_url'] : false;
-		$storage_class = isset(self::$options['storage_class']) ? self::$options['storage_class'] : false;
+		$storage_class = isset(self::$options['storage_class']) ? self::$options['storage_class'] : 'STANDARD';
 		if (!$s3_bucket || !$s3_url)
 			return $content;
 
 		// get attachments
 		$attachment_meta_key = self::META_KEY;
 		$post_meta_key = self::META_KEY.'-replace';
+		$replace_data_org = array();
 		if ($post_id) {
 			if ($replace_data = get_post_meta($post_id, $post_meta_key, true)) {
 				$replace_data_org = isset($replace_data[$s3_bucket]) ? $replace_data[$s3_bucket] : array();
@@ -188,7 +204,13 @@ class NephilaClavata {
 				dbgx_trace_var($attachments);
 			}
 			if (!$attachments) {
-				return $content;
+				if (empty($attachment_id)) {
+					return $content;
+				} else {
+					$attachment = new stdClass();
+					$attachment->ID = $attachment_id;
+					$attachments[] = $attachment;
+				}
 			}
 		}
 
@@ -228,7 +250,13 @@ class NephilaClavata {
 						$S3_medias[$size] = $val;
 						if (!isset($replace_data[$search_url]) && (!is_admin() || $pagenow === 'upload.php')) {
 							$replace_data[$search_url] = $replace_url;
-							$content = str_replace($search_url, $replace_url, $content);
+							if (strpos($content, $search_url) !== false) {
+								$content = str_replace($search_url, $replace_url, $content);
+							} else if (empty($post_id)) {
+								$search_url = preg_replace('#https?://[^/]*/#i', '/', $search_url);
+								$replace_data[$search_url] = $replace_url;
+								$content = str_replace($search_url, $replace_url, $content);
+							}
 						}
 					}
 
@@ -240,13 +268,19 @@ class NephilaClavata {
 				}
 				if (count($S3_medias) > 0 && $S3_medias !== $S3_medias_old)
 					update_post_meta($attachment->ID, $attachment_meta_key, array($s3_bucket => $S3_medias));
-			} else if (!is_admin() || $pagenow === 'upload.php') {
+			} else if (!is_admin() || $pagenow === 'upload.php' || $pagenow === 'admin-ajax.php') {
 				foreach($S3_medias_new as $size => $val ) {
 					$search_url  = $val['url'];
 					$replace_url = $s3_url . $val['s3_key'];
 					if (!isset($replace_data[$search_url])) {
 						$replace_data[$search_url] = $replace_url;
-						$content = str_replace($search_url, $replace_url, $content);
+						if (strpos($content, $search_url) !== false) {
+							$content = str_replace($search_url, $replace_url, $content);
+						} else if (empty($post_id)) {
+							$search_url = preg_replace('#https?://[^/]*/#i', '/', $search_url);
+							$replace_data[$search_url] = $replace_url;
+							$content = str_replace($search_url, $replace_url, $content);
+						}
 					}
 					if (!file_exists($val['file']))
 						$this->s3_download($val['file'], $s3_bucket, $val['s3_key']);
@@ -378,10 +412,12 @@ class NephilaClavata {
 	private function get_post_attachments_from_content($content, &$attachments_count, &$medias) {
 		$attachments = array();
 		$upload_dir = wp_upload_dir();
+		$dir = preg_replace('#https?://[^/]*/#i', '/', $upload_dir['baseurl']);
 
 		$img_src_pattern = array(
 			'#<a [^>]*href=[\'"]'.preg_quote($upload_dir['baseurl']).'/([^\'"]*)[\'"][^>]*><img [^>]*></a>#ism',
 			'#<img [^>]*src=[\'"]'.preg_quote($upload_dir['baseurl']).'/([^\'"]*)[\'"][^>]*>#ism',
+			'#<img [^>]*src=[\'"]'.preg_quote($dir).'/([^\'"]*)[\'"][^>]*>#ism',
 			);
 		$img_src_pattern = (array)apply_filters('NephilaClavata/img_src_pattern', $img_src_pattern);
 
@@ -424,7 +460,7 @@ class NephilaClavata {
 		return $attachment;
 	}
 
-	// Get attachment sizes 
+	// Get attachment sizes
 	private function get_attachment_sizes($attachment_id){
 		$imagedata = wp_get_attachment_metadata($attachment_id);
 		$sizes = array_merge(array('normal'), isset($imagedata['sizes']) ? array_keys($imagedata['sizes']) : array());
