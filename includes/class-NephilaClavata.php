@@ -89,13 +89,10 @@ class NephilaClavata {
 				$post_id,
 				$meta_key));
 			$url = $postmeta->meta_value;
-			error_log('get_post_metadata url:'.var_export($url, true)."\n", 3, WP_CONTENT_DIR.'/logs/debug.log');
 			$upload_dir = wp_upload_dir();
 			if (!empty($url) && strpos($url, $upload_dir['baseurl']) !== false) {
 				$s3_key = preg_replace('#https?://[^/]*/#i', '/', $url);
-				error_log('get_post_metadata s3_key:'.var_export($s3_key, true)."\n", 3, WP_CONTENT_DIR.'/logs/debug.log');
 				$value = $s3_url . $s3_key;
-				error_log('get_post_metadata value:'.var_export($value, true)."\n", 3, WP_CONTENT_DIR.'/logs/debug.log');
 			} else {
 				$value = $url;
 			}
