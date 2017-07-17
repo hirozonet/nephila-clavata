@@ -30,6 +30,7 @@ class NephilaClavata {
 		add_filter('widget_text', array($this, 'widget_text'));
 		add_filter('wp_get_attachment_url', array($this, 'get_attachment_url'), 10, 2);
 		add_filter('wp_calculate_image_srcset', array($this, 'wp_calculate_image_srcset'), 10, 5);
+		add_filter('get_post_metadata', array($this, 'get_post_metadata'), 10, 4);
 
 		// update S3 object
 		add_action('edit_attachment', array($this, 'edit_attachment'));
@@ -74,6 +75,32 @@ class NephilaClavata {
 		}
 
 		return $sources;
+	}
+
+	// get_post_metadata filter hook
+	public function get_post_metadata($meta_value, $post_id, $meta_key, $single) {
+		$value = null;
+		$s3_url = isset(self::$options['s3_url']) ? self::$options['s3_url'] : false;
+		if (!empty($s3_url) && $meta_key === 'mv_image') {
+			global $wpdb;
+			$postmeta = $wpdb->get_row($wpdb->prepare("
+				select meta_value from {$wpdb->postmeta}
+				where post_id = %d and meta_key = %s limit 1",
+				$post_id,
+				$meta_key));
+			$url = $postmeta->meta_value;
+			error_log('get_post_metadata url:'.var_export($url, true)."\n", 3, WP_CONTENT_DIR.'/logs/debug.log');
+			$upload_dir = wp_upload_dir();
+			if (!empty($url) && strpos($url, $upload_dir['baseurl']) !== false) {
+				$s3_key = preg_replace('#https?://[^/]*/#i', '/', $url);
+				error_log('get_post_metadata s3_key:'.var_export($s3_key, true)."\n", 3, WP_CONTENT_DIR.'/logs/debug.log');
+				$value = $s3_url . $s3_key;
+				error_log('get_post_metadata value:'.var_export($value, true)."\n", 3, WP_CONTENT_DIR.'/logs/debug.log');
+			} else {
+				$value = $url;
+			}
+		}
+		return $value;
 	}
 
 	// wp_get_attachment_url filter hook
