@@ -185,6 +185,9 @@ class NephilaClavata {
 				$replace_data_org = isset($replace_data[$s3_bucket]) ? $replace_data[$s3_bucket] : array();
 				foreach($replace_data_org as $search_url => $replace_url){
 					$content = str_replace($search_url, $replace_url, $content);
+					$pattern = '#(src=[\'"])'.preg_replace('#https?://[^/]*/#i', '/', $search_url).'([\'"])#i';
+					$replacement = '$1'.$replace_url.'$2';
+					$content = preg_replace($pattern, $replacement, $content);
 				}
 			}
 
